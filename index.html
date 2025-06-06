@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Medication Tracker (Prototype)</title>
+  <script src="https://unpkg.com/html5-qrcode"></script>
+  <style>
+    body { font-family: sans-serif; margin: 20px; text-align: center; }
+    #reader { width: 300px; margin: 0 auto; }
+    video { transform: scaleX(-1); }
+    .med-box { padding: 5px; border: 1px solid #ccc; margin: 5px auto; max-width: 400px; display: flex; justify-content: space-between; align-items: center; }
+    input, button { margin: 5px; }
+    .remove-btn { background: #f55; border: none; color: white; padding: 5px 10px; cursor: pointer; }
+
+    #modal {
+      position: fixed;
+      top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0,0,0,0.6);
+      display: none;
+      justify-content: center;
+      align-items: center;
+    }
+    #modal-content {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      width: 300px;
+      box-shadow: 0 0 10px #000;
+      text-align: center;
+    }
+    #modal-header {
+      height: 10px;
+      border-radius: 8px 8px 0 0;
+      margin-top: -20px;
+    }
+    #modal button {
+      margin-top: 15px;
+      padding: 10px;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <h1>⚕️ Medication Tracker</h1>
+
+  <div id="reader"></div>
+  <p><strong>Last QR Scanned:</strong> <span id="last-scan">None</span></p>
+
+  <label for="mock-datetime">Set Test Date/Time:</label>
+  <input type="datetime-local" id="mock-datetime">
+
+  <h2>🔄 Next Scheduled Medication</h2>
+  <div id="next-med">Checking...</div>
+
+  <h2>➕ Add Medication Schedule</h2>
+  <form id="plan-form">
+    <input type="text" id="med-name" placeholder="Medication Name" required />
+    <input type="time" id="med-time" required />
+    <button type="submit">Add</button>
+  </form>
+
+  <h2>📅 Schedule</h2>
+  <ul id="plan-list"></ul>
+
+  <h2>⌚ History <button onclick="clearLog()">Clear All</button></h2>
+  <div id="log"></div>
+
+  <div id="modal">
+    <div id="modal-content">
+      <div id="modal-header"></div>
+      <p id="modal-text"></p>
+      <button id="modal-confirm">YES, I TAKE THE MEDICATION NOW</button>
+    </div>
+  </div>
+
+  <script>
+    let plan = [];
+    let log = JSON.parse(localStorage.getItem("log") || "[]");
+
+    const medColors = {
+      "Aspirin_100mg": "red",
+      "Paracetamol_500mg": "blue",
+      "VitaminD_1000IU": "green",
+      "WrongDrug_1": "gray",
+      "WrongDrug_2": "black"
+    };
+
+    function setDefaultMockDate() {
+      const now = new Date();
+      const localISOTime = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0,16);
+      document.getElementById("mock-datetime").value = localISOTime;
+    }
+
+    setDefaultMockDate();
+
+    fetch("med_schedule.json")
+      .then(response => response.json())
+      .then(data => {
+        for (const name in data) {
+          data[name].forEach(time => plan.push({ name, time }));
+        }
+        sortPlan();
+        updatePlanList();
+        updateNextMedication();
+      });
+
+    function sortPlan() {
+      plan.sort((a, b) => {
+        const [ha, ma] = a.time.split(":").map(Number);
+        const [hb, mb] = b.time.split(":").map(Number);
+        return (ha * 60 + ma) - (hb * 60 + mb);
+      });
+    }
+
+    const updatePlanList = () => {
+      const ul = document.getElementById("plan-list");
+      ul.innerHTML = "";
+      plan.forEach(item => {
+        const li = document.createElement("li");
+        li.textContent = `${item.name} — ${item.time}`;
+        ul.appendChild(li);
+      });
+    };
+
+    const updateLog = () => {
+      const div = document.getElementById("log");
+      div.innerHTML = "";
+      log.forEach((entry, index) => {
+        const box = document.createElement("div");
+        box.className = "med-box";
+        box.innerHTML = `${entry.time} — ${entry.name}`;
+        const btn = document.createElement("button");
+        btn.textContent = "✖";
+        btn.className = "remove-btn";
+        btn.onclick = () => {
+          log.splice(index, 1);
+          localStorage.setItem("log", JSON.stringify(log));
+          updateLog();
+        };
+        box.appendChild(btn);
+        div.appendChild(box);
+      });
+    };
+
+    const clearLog = () => {
+      if (confirm("Are you sure you want to clear the entire history?")) {
+        log = [];
+        localStorage.removeItem("log");
+        updateLog();
+      }
+    };
+
+    const getCurrentTime = () => {
+      const mock = document.getElementById("mock-datetime").value;
+      const current = mock ? new Date(mock) : new Date();
+      return current;
+    };
+
+    const updateNextMedication = () => {
+      const now = getCurrentTime();
+      const nowMinutes = now.getHours() * 60 + now.getMinutes();
+      let upcoming = null;
+      let minDiff = Infinity;
+
+      plan.forEach(p => {
+        const [h, m] = p.time.split(":").map(Number);
+        const medMinutes = h * 60 + m;
+        const diff = medMinutes - nowMinutes;
+        if (diff >= 0 && diff < minDiff) {
+          minDiff = diff;
+          upcoming = p;
+        }
+      });
+
+      const nextMedText = upcoming
+        ? `${upcoming.name} at ${upcoming.time}`
+        : "No more scheduled meds today";
+      document.getElementById("next-med").textContent = nextMedText;
+    };
+
+    document.getElementById("plan-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const name = document.getElementById("med-name").value;
+      const time = document.getElementById("med-time").value;
+      plan.push({ name, time });
+      sortPlan();
+      updatePlanList();
+      updateNextMedication();
+      e.target.reset();
+    });
+
+    function showModal(medName, scheduledTime) {
+      const modal = document.getElementById("modal");
+      const header = document.getElementById("modal-header");
+      const text = document.getElementById("modal-text");
+      const button = document.getElementById("modal-confirm");
+
+      const color = medColors[medName] || "orange";
+      header.style.backgroundColor = color;
+      text.innerText = `✅ It's okay to take ${medName} now (scheduled at: ${scheduledTime})`;
+
+      modal.style.display = "flex";
+
+      button.onclick = () => {
+        const now = getCurrentTime();
+        log.push({ name: medName, time: now.toLocaleString() });
+        localStorage.setItem("log", JSON.stringify(log));
+        updateLog();
+        updateNextMedication();
+        modal.style.display = "none";
+      };
+    }
+
+    const scanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: 250 });
+    scanner.render(onScanSuccess);
+
+    function onScanSuccess(qrCodeMessage) {
+      document.getElementById("last-scan").textContent = qrCodeMessage;
+      const now = getCurrentTime();
+      const nowStr = now.toTimeString().slice(0, 5);
+
+      const matches = plan.filter(p => p.name === qrCodeMessage);
+      if (matches.length === 0) {
+        alert("⚠️ Not scheduled or unknown medication!");
+        return;
+      }
+
+      let bestMatch = null;
+      let minDiff = Infinity;
+
+      matches.forEach(p => {
+        const [h, m] = p.time.split(":").map(Number);
+        const medMinutes = h * 60 + m;
+        const nowMinutes = now.getHours() * 60 + now.getMinutes();
+        const diff = Math.abs(medMinutes - nowMinutes);
+        if (diff < minDiff) {
+          minDiff = diff;
+          bestMatch = p;
+        }
+      });
+
+      if (minDiff <= 60) {
+        showModal(qrCodeMessage, bestMatch.time);
+      } else {
+        const times = matches.map(p => p.time).join(", ");
+        alert(`⚠️ ${qrCodeMessage} is scheduled at: ${times}, but it is not time yet.`);
+      }
+    }
+
+    updateLog();
+  </script>
+</body>
+</html>
